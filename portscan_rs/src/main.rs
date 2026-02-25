@@ -1,4 +1,6 @@
 use clap::Parser;
+use std::sync::Arc;
+use tokio::sync::Semaphore;
 use tokio::{self};
 
 #[derive(Parser)]
@@ -33,10 +35,32 @@ async fn scan_port(addr: std::net::IpAddr, port: u16, timeout_ms: u64) -> bool {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let semaphore = Arc::new(Semaphore::new(100));
     let args = Args::parse();
     println!(
         "Starting scanning target {} ports from {} to {}",
         args.target, args.start_port, args.end_port
     );
+
+    let mut tasks = Vec::new();
+
+    for port in args.start_port..=args.end_port {
+        let permit_clone = semaphore.clone();
+        let task = tokio::spawn(async move {
+            let _permit = permit_clone.acquire().await.unwrap();
+            let is_open = scan_port(args.target, port, args.duration).await;
+            if is_open {
+                println!("Port {} is open", port);
+            }
+        });
+        tasks.push(task);
+    }
+
+    for task in tasks {
+        task.await.unwrap();
+    }
+
+    println!("Scanning finished");
+
     Ok(())
 }
